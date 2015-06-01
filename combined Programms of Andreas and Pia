@@ -1,0 +1,379 @@
+//I CHANGED THE NAME OF THE FUNCTION gangschaltung(unsigned char richtung_l, unsigned char richtung_r) TO drive(unsigned char richtung_l, unsigned char richtung_r)!!
+//I ONLY ADDED MY FUNCTIONS BECAUSE I WASN'T ABLE TO GET AN INTERNET CONNECTION AT THE UNIVERSITY
+
+
+/*
+ * robot_project_andreas.c
+ *
+ * Created: 18.05.2015 22:14:06
+ *  Author: Andreas Glatz
+ */ 
+
+#include <avr/io.h>
+#include <avr/interrupt.h>
+
+void init_ddr(void);
+void initpwm(void);
+void drive(unsigned char richtung_l, unsigned char richtung_r);
+
+char toggle = 0;
+char tim0 = 0;
+unsigned char adc1;
+unsigned char adc2;
+unsigned char adc3;
+unsigned char adc4;
+unsigned char adcergebnis1;
+unsigned char adcergebnis2;
+uint16_t findline;
+unsigned char direction=0;
+unsigned char command=0;
+unsigned char counter=0;
+unsigned char state=0;
+
+
+void UART_Configuration(){
+	UBRRH = 0;
+	UBRRL = 51; 					//Baudrate 9600, Asynchronous Normal mode
+	UCSRC =(1<<URSEL)|(1<<UCSZ1)|(1<<UCSZ0); 	//Frameformat 8Bit, 1 Stopbit, no Parity
+	UCSRB =(1<<RXEN)| (1<<RXCIE)|;//(1<<TXEN);			//receive enabled, rx interrupt enabled
+}
+
+void initadc(unsigned char links,unsigned char rechts){
+	ADCSRA |= (1<<ADEN);	//|(1<<ADPS2)|(1<<ADPS1)AD-Enable|Prescaler CLK/128
+	if ((links == 0 && rechts == 0)|(links == 1 && rechts == 1))
+	{
+		ADMUX = (1<<REFS0)|(1<<ADLAR);		//ADC0 Select AVCC as Vref, left justify data registers and select ADC0 as input channel
+	}
+	
+	if (links == 1 && rechts == 0)
+	{
+		ADMUX = (1<<REFS0)|(1<<MUX0)|(1<<MUX1)|(1<<ADLAR);		//ADC3 Select AVCC as Vref, left justify data registers and select ADC0 as input channel
+	}
+	
+	if (links == 0 && rechts == 1)
+	{
+		ADMUX = (1<<REFS0)|(1<<MUX1)|(1<<ADLAR);		//ADC2 Select AVCC as Vref, left justify data registers and select ADC0 as input channel
+	}
+	ADCSRA |= (1<<ADSC);				// Start Conversion
+}
+
+void drive(unsigned char richtung_l, unsigned char richtung_r){
+	OCR1AH = 0x00;
+	OCR1AL = richtung_l;
+	
+	OCR1BH = 0x00;	//Endwert (Top)
+	OCR1BL = richtung_r;
+	
+}
+
+void initpwm(void){
+	
+	TCCR1A |= (1<<WGM10)|(1<<COM1A1)|(1<<COM1B1);
+	TCCR1B |= (1<<CS11); //Prescaler
+	
+	ICR1H = 0x00;	//Startwert (Bottom)
+	ICR1L = 0x00;
+	
+	OCR1AH = 0x00;	//Endwert (Top)
+	OCR1AL = 0x00;
+	
+	OCR1BH = 0x00;	//Endwert (Top)
+	OCR1BL = 0x00;
+	
+	
+}
+
+void init_ddr(void){			//DDR-config
+	//OUTPUT
+	DDRB |= (1<<PB1)|(1<<PB2);	//PWM
+	DDRC |= (1<<PC4);			//LED
+	DDRD |= (1<<PD6)|(1<<PD7);	//motor enable
+	DDRD |= (1<<PD4)|(1<<PD5);	//back led//PINS OF BACKLIGHTS CHANGED!!!!
+}
+
+void inittim0(void){
+		TIMSK |= (1<<TOIE0);         //Overflow Interrupt aktivieren
+		TCCR0 |= (1<<CS02)|(1<<CS00);       // Prescaler auf 1 setzen, Takt = 8MHz
+}
+
+void linefollow(void)
+{
+		char x = 25;
+		if (adcergebnis1 < x && adcergebnis2 > x)	//at the line right
+		{
+			findline = 900;
+			direction = 1;
+			drive(125,0);
+			PORTD |= (1<<PD5);
+			PORTD |= (1<<PD4);
+			PORTD |= (1<<PD6)|(1<<PD7);
+		}
+		if (adcergebnis1 > x && adcergebnis2 < x)	//at the line left
+		{
+			findline = 900;
+			direction = 2;
+			drive(0,125);
+			PORTD |= (1<<PD5);
+			PORTD |= (1<<PD4);
+			PORTD |= (1<<PD6)|(1<<PD7);
+		}
+		if (adcergebnis1 < x && adcergebnis2 < x)	//on the line
+		{
+			findline = 900;
+			drive(0,0);
+			PORTD |= (1<<PD5);
+			PORTD |= (1<<PD4);
+			PORTD |= (1<<PD6)|(1<<PD7);
+		}
+		if (adcergebnis1 > x && adcergebnis2 > x) //No line
+		{
+			findline++;
+			
+			if (findline<=1600)
+			{
+				if (direction==2)
+				{
+					drive(0,255);
+					PORTD |= (1<<PD5);
+					PORTD &= ~(1<<PD4);
+					PORTD |= (1<<PD7);
+					PORTD &= ~(1<<PD6);
+				}
+				else
+				{
+					drive(255,0);
+					PORTD |= (1<<PD5);
+					PORTD &= ~(1<<PD4);
+					PORTD |= (1<<PD6);
+					PORTD &= ~(1<<PD7);
+				}
+			}
+			if (findline>1600)
+			{
+				drive(255,100);
+				PORTD |= (1<<PD5);
+				PORTD &= ~(1<<PD4);
+				PORTD |= (1<<PD6);
+				PORTD &= ~(1<<PD7);
+			}
+			if (findline>6000)
+			{
+				drive(0,0);
+				PORTD |= (1<<PD5);
+				PORTD |= (1<<PD4);
+				PORTD |= (1<<PD6)|(1<<PD7);
+			}
+			if (findline>8000)
+			{
+				findline=0;
+			}
+			
+		}
+}
+
+
+//void ausgabe(unsigned char temp){
+//	while(!(UCSRA & (1<<UDRE))){};
+//	UDR = temp;
+//	while(!(UCSRA & (1<<TXC))){};
+//	UCSRA |= (1<<TXC);
+//}
+
+void check_command(char previous_command){
+	if(command==previous_command) return;
+	else{
+		switch (command) {
+
+			case 'B':	
+				Battle();
+			break;
+
+			case 'F':
+				linefollow();
+			break;
+
+			case 'E':
+				Battle_End();
+			break;
+
+			case 'S':
+				Standby();
+			break;
+
+			case 'L':
+				
+			break;
+
+			case 'R':
+				
+			break;
+
+						
+		}
+	}
+
+}
+
+void Battle_Start(){
+	state=0;
+
+	while(1) {
+
+		switch (state) {
+
+			case 0:	
+				Survive(0);
+			break;
+
+			case 1:
+				initadc(1,0);
+				Hunt();
+			break;
+
+			case 2:
+				// target code
+			break;
+
+			case 3:
+				// attack code
+			break;
+		}
+	}
+
+	
+
+}
+
+void Battle_End(){
+	drive(0,0);
+	counter=0;
+	while(1){
+		blinking_LEDs();
+		check_command('E');
+	}
+
+}
+
+
+void Standby(){
+	cli();		//clear global interrupt flag//robot won't react to commands anymore
+	drive(0,0);	//stop
+	PORTD &= ~((1<<PD4)|(1<<PD5));	//turns of LEDs //PORTS HAVE TO BE CHANGED!
+	while(1){} //does nothing until turned off and on again
+
+}
+
+void blinking_LEDs(){
+	if(counter>=30){
+		PORT^=(1<<PD4)|(1<<PD5);	//PORTS NEED TO BE CHANGED!
+		counter=0;
+	}
+
+}
+
+void Hunt(){
+	counter=0;
+	char x = ?;
+	char distance_r;
+	char distance_l;
+		
+	while(1){
+		if (adcergebnis1 < x  || adcergebnis2 < x){ 	//if black ? stop,survive state
+			gangschaltung(0,0);
+			state=0;
+			return;
+		}
+		distance_r=distance_right();
+		distance_l=distance_left();
+		if(distance_r>? || distance_l>?){		//if opponent near -> stop, target state
+			gangschaltung(0,0);
+			state=2;
+			return;
+		}
+		gangschaltung(100,100);
+		if(counter>=122){ //turn after one second //I'm going to change this so it moves around in an 8 shape
+			counter=0;
+			gangschaltung(0,150);
+		}
+	}
+
+
+}
+
+char distance_right(){
+	//Annahme rechts ?  ADC1/PC1
+	ADCSRA |= (1<<ADEN);
+	ADMUX=(1 << REFS0)|(1 << ADLAR)|(1 << MUX0);//ADC1;Referenz;linksbündig
+	ADCSRA|=(1<<ADSC); //starts conversion, ADSC wird gelöscht wenn AD Wandlung fertig ist
+	while(ADCSRA&(1<<ADSC));	//true solange ADSC=1 //wartet bis AD Wandlung abgeschlossen ist
+	return ADCH;	
+}
+
+char distance_left(){
+	//Annahme links ?  ADC0/PC0
+	ADCSRA |= (1<<ADEN);
+	ADMUX=(1 << REFS0)|(1 << ADLAR));	//ADC0;Referenz;linksbündig
+	ADCSRA|=(1<<ADSC); //starts conversion, ADSC wird gelöscht wenn AD Wandlung fertig ist
+	while(ADCSRA&(1<<ADSC));	//true solange ADSC=1 //wartet bis AD Wandlung abgeschlossen ist
+	return ADCH;	
+}
+
+
+int main(void)
+{
+
+	sei();           // Globale Interrupts aktivieren
+	init_ddr();
+	initpwm();
+	inittim0();
+	initadc(1,0);
+	UART_Configuration();
+	PORTD |= (1<<PD4);
+    
+	while(1)
+    {
+	check_command(0);	
+		
+    }	
+}
+
+ISR(TIMER0_OVF_vect)
+{	
+	counter++;
+	tim0++;
+	if (tim0 > 1)
+	{
+		PORTC |= (1<<PC4);
+		if (tim0 > 2)
+		{
+			tim0 = 0;
+			
+			
+			initadc(1,0);
+			adc2 = ADCH;
+			initadc(0,1);
+			adc3 = ADCH;
+			adcergebnis1 = adc1 - adc2;
+			adcergebnis2 = adc3 - adc4;	
+			
+		}
+	}
+	else
+	{
+		PORTC &= ~(1<<PC4);
+		if (tim0 > 0)
+		{
+			initadc(1,0);
+			adc1 = ADCH;
+			initadc(0,1);
+			adc4 = ADCH;
+		}
+	}
+
+}
+
+ISR(USART_RXC_vect){
+	
+	command=UDR; //commands in main
+	
+}
